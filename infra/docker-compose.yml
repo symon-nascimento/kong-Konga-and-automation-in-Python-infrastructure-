@@ -1,0 +1,107 @@
+version: '2.1'
+
+volumes:
+  postgres_data:
+  konga_data:
+networks:
+  kong-net:
+  
+services:
+
+  #######################################
+  # Postgres: The database used by Kong
+  #######################################
+  kong-database:
+    image: postgres:latest
+    container_name: kong-db
+    env_file:
+      - ./envs/.api-gateway.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "kong"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: on-failure
+
+  #######################################
+  # Kong database migration
+  #######################################
+  kong-migrations:
+    image: kong:latest
+    command: kong migrations bootstrap && kong migrations up && kong migrations finish
+    depends_on:
+      kong-database:
+        condition: service_healthy
+    env_file:
+      - ./envs/.api-gateway.env
+    restart: on-failure
+
+  #######################################
+  # Kong: The API Gateway
+  #######################################
+  kong:
+    image: kong:latest
+    container_name: kong-api
+    user: 'root'
+    depends_on:
+      kong-database:
+        condition: service_healthy
+    env_file:
+      - ./envs/.api-gateway.env
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    restart: on-failure
+
+
+  konga:
+    image: pantsel/konga
+    container_name: konga
+    depends_on:
+      - kong
+    environment:
+      NODE_ENV: production
+    links:
+      - kong:kong
+    ports:
+      - 1337:1337
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+    volumes:
+      - konga_data:/app/kongadata
+      
+  #######################################
+  # Example Microservice
+  #######################################
+  postgres:
+    image: postgres
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./.docker/postgres/init_db/init-database.sh:/docker-entrypoint-initdb.d/init-database.sh
+    env_file:
+      - ./envs/.postgres.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - 5432:5432
+
+  # agenda:
+  #   image: symonnascimento/api_agenda:1.1
+  #   restart: always
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   networks:
+  #     - kong-net
+  #   ports:
+  #     - 4000:4000
